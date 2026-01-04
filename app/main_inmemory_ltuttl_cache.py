@@ -4,12 +4,9 @@ from pydantic import BaseModel
 
 from cache import LruTtlCache
 from db import SessionLocal, Product, init_db_and_seed
-from storage.redis_cache import get_json, set_json, delete as redis_delete
-from events.pubsub import publish_invalidate, start_invalidation_listener
 
 CACHE_CAPACITY = int(os.getenv("CACHE_CAPACITY", "200"))
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "20"))
-REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", "60"))
 
 app = FastAPI()
 cache = LruTtlCache(capacity=CACHE_CAPACITY, default_ttl_s=CACHE_TTL_SECONDS)
@@ -30,27 +27,13 @@ class ProductUpdate(BaseModel):
 def startup():
     init_db_and_seed()
 
-    # When we receive an invalidation event, clear the local cache and Redis for those keys
-    def on_validate(keys: list[str]) -> None:
-        for k in keys:
-            cache.delete(k)  # Clear local cache
-            redis_delete(k)  # Also clear Redis (in case it wasn't cleared by the sender)
-
-    start_invalidation_listener(on_validate)
-
 @app.get("/products/{product_id}", response_model=ProductOut)
 def get_product(product_id: int):
     key = cache_key(product_id)
 
-    # local (L1) cache check
+    # check cache first
     cached = cache.get(key)
     if cached is not None:
-        return cached
-
-    # redis (L2) cache check
-    cached = get_json(key)
-    if cached is not None:
-        cache.set(key, cached) # store in local too
         return cached
     
     # if not in cache, get from database
@@ -60,16 +43,11 @@ def get_product(product_id: int):
             raise HTTPException(status_code=404, detail="Not found")
 
         data = {"id": product.id, "name": product.name, "price_cents": product.price_cents}
-
-        # write to redis + local
-        set_json(key, data, ttl_s=REDIS_TTL_SECONDS)
         cache.set(key, data) # uses default TTL
         return data
 
 @app.put("/products/{product_id}", response_model=ProductOut)
 def upsert_product(product_id: int, payload: ProductUpdate):
-    key = cache_key(product_id)
-
     with SessionLocal() as db:
         product = db.get(Product, product_id)
         if not product:
@@ -78,14 +56,11 @@ def upsert_product(product_id: int, payload: ProductUpdate):
         else:
             product.name = payload.name
             product.price_cents = payload.price_cents
-        
-        db.commit()
+
+    db.commit()
 
     # invalidate cache after write
-    redis_delete(key)
-    cache.delete(key)
-
-    publish_invalidate([key]) # tell other instances to invalidate their LOCAL cache too
+    cache.delete(cache_key(product_id))
 
     return {"id": product_id, "name": payload.name, "price_cents": payload.price_cents}
 

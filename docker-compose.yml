@@ -7,17 +7,61 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432" 
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
    
-  web:
+  # web:
+  #   build: ./app
+  #   environment:
+  #     DATABASE_URL: ${DATABASE_URL}
+  #     CACHE_CAPACITY: ${CACHE_CAPACITY}
+  #     CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS}
+  #     PYDEVD_DISABLE_FILE_VALIDATION: 1
+  #   ports:
+  #     - "8000:8000"
+  #     - "5678:5678"  # Debug port
+  #   depends_on:
+  #     - db
+  #   command: python -Xfrozen_modules=off debug_entrypoint.py
+
+  web_redis1:
     build: ./app
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      CACHE_CAPACITY: ${CACHE_CAPACITY}
-      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS}
-      PYDEVD_DISABLE_FILE_VALIDATION: 1
+      REDIS_URL: redis://redis:6379/0
+      CACHE_CAPACITY: "200"
+      CACHE_TTL_SECONDS: "40"
+      REDIS_TTL_SECONDS: "60"
     ports:
       - "8000:8000"
-      - "5678:5678"  # Debug port
+      # Debug port (uncomment to enable debugging):
+      # - "5678:5678"
     depends_on:
       - db
-    command: python -Xfrozen_modules=off debug_entrypoint.py
+      - redis
+    restart: unless-stopped
+    # Debug command (uncomment to enable debugging):
+    # command: python -Xfrozen_modules=off debug_entrypoint.py
+
+  web_redis2:
+    build: ./app
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_CAPACITY: "200"
+      CACHE_TTL_SECONDS: "40"
+      REDIS_TTL_SECONDS: "60"
+    ports:
+      - "8001:8000"
+      # Debug port (uncomment to enable debugging):
+      # - "5679:5678"
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    # Debug command (uncomment to enable debugging):
+    # command: python -Xfrozen_modules=off debug_entrypoint.py
+
